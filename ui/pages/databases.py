@@ -2,7 +2,7 @@
 Database management page with modern card-based design - Fully Functional
 Version: 2.0 - Refactored for better debugging and maintainability
 """
-
+from core.permission_checker import PermissionChecker
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QTableWidget, QTableWidgetItem,
@@ -16,6 +16,9 @@ import subprocess
 import os
 from datetime import datetime
 import traceback
+
+
+
 
 
 # ============================================================================
@@ -639,7 +642,21 @@ class ViewTablesDialog(QDialog):
         """Create a new table with improved validation"""
         print(f"[DEBUG] Opening Create Table dialog for {self.db_name}")
         dialog = CreateTableDialog(self.db_name, self)
-        
+            # Check permission
+        if hasattr(self.parent(), 'permission_checker'):
+            perm_checker = self.parent().permission_checker
+            if perm_checker and not perm_checker.can_create_table(self.db_name):
+                QMessageBox.warning(
+                    self,
+                    " Permission Denied",
+                    f"You do not have permission to create tables in '{self.db_name}'.\n\n"
+                    f"Required permission: CREATE on '{self.db_name}'\n"
+                    f"Please contact your administrator for access."
+                )
+                print(f"[PERMISSIONS] ✗ User denied CREATE TABLE in {self.db_name}")
+                return
+
+        dialog = CreateTableDialog(self.db_name, self)                   
         if dialog.exec() == QDialog.Accepted:
             table_name, columns = dialog.get_table_info()
             
@@ -804,6 +821,24 @@ class ViewTablesDialog(QDialog):
     def _drop_table(self, table_name):
         """Drop a table with confirmation"""
         print(f"[DEBUG] Drop table requested: {table_name}")
+
+        # ========== PERMISSION CHECK - ADD THIS AT THE START ==========
+        # Check if user has permission to drop tables in this database
+        if hasattr(self.parent(), 'permission_checker'):
+            perm_checker = self.parent().permission_checker
+            if perm_checker and not perm_checker.can_drop_table(self.db_name):
+                QMessageBox.warning(
+                    self,
+                    "🔒 Permission Denied",
+                    f"You do not have permission to drop tables in '{self.db_name}'.\n\n"
+                    f"Required permission: DELETE on '{self.db_name}'\n"
+                    f"Please contact your administrator for access."
+                )
+                print(f"[PERMISSIONS] ✗ User denied DROP TABLE {table_name} in {self.db_name}")
+                return  # STOP HERE - Do not proceed
+        # ========== END PERMISSION CHECK ==========
+
+        # If we get here, user has permission - proceed with confirmation
         reply = QMessageBox.question(
             self,
             "Confirm Drop Table",
@@ -813,22 +848,20 @@ class ViewTablesDialog(QDialog):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
-        
+
         if reply == QMessageBox.Yes:
             try:
                 cursor = self.db_manager.connection.cursor()
                 cursor.execute(f"DROP TABLE `{self.db_name}`.`{table_name}`")
                 cursor.close()
-                
                 print(f"[SUCCESS] Table {table_name} dropped successfully")
+
                 QMessageBox.information(
                     self,
                     "Table Dropped",
                     f"Table '{table_name}' has been successfully dropped."
                 )
-                
                 self._refresh_tables()
-                
             except Exception as e:
                 print(f"[ERROR] Failed to drop table: {e}")
                 traceback.print_exc()
@@ -882,13 +915,30 @@ class DatabasesPage(QWidget):
     delete_backup_requested = Signal(str)
     view_details_requested = Signal(str)
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, user_data=None):
         super().__init__(parent)
         self.db_manager = None
         self.backup_directory = "backups"
+        self.user_data = user_data or {}
+        self.permission_checker = None
         print("[DEBUG] DatabasesPage initialized")
         self._init_ui()
         self.load_real_databases()
+        self._init_permissions()  
+
+
+    def _init_permissions(self):
+        """Initialize permission checker"""
+        if self.user_data and self.db_manager:
+            username = self.user_data.get('username', 'unknown')
+            role = self.user_data.get('role', 'user')
+            self.permission_checker = PermissionChecker(
+                self.db_manager,
+                username,
+                role
+            )
+            print(f"[PERMISSIONS] ✓ Initialized for {username} ({role})")
+
     
     def _init_ui(self):
         """Initialize UI components"""
@@ -1332,33 +1382,39 @@ class DatabasesPage(QWidget):
     def _handle_new_database(self):
         """Create new database"""
         print("[DEBUG] New database dialog opened")
+
+        # Check permission
+        if self.permission_checker and not self.permission_checker.can_create_database():
+            QMessageBox.warning(
+                self,
+                "🔒 Permission Denied",
+                f"You do not have permission to create databases.\n\n"
+                f"Only administrators can create new databases.\n"
+                f"Please contact your administrator for access."
+            )
+            print(f"[PERMISSIONS] ✗ {self.user_data.get('username')} denied CREATE DATABASE")
+            return
+
         dialog = NewDatabaseDialog(self)
-        
         if dialog.exec() == QDialog.Accepted:
             db_name = dialog.get_database_name()
-            
             if not db_name:
                 QMessageBox.warning(self, "Invalid Input", "Please enter a database name.")
                 return
-            
             try:
                 if not self.db_manager or not self.db_manager.connection.is_connected():
                     self.db_manager = DatabaseManager()
                     self.db_manager.connect()
-                
                 cursor = self.db_manager.connection.cursor()
                 cursor.execute(f"CREATE DATABASE `{db_name}`")
                 cursor.close()
-                
                 print(f"[SUCCESS] Database {db_name} created")
                 QMessageBox.information(
                     self,
                     "Success",
                     f"Database '{db_name}' has been created successfully!"
                 )
-                
                 self.load_real_databases()
-                
             except Exception as e:
                 print(f"[ERROR] Failed to create database: {e}")
                 traceback.print_exc()
@@ -1439,36 +1495,42 @@ class DatabasesPage(QWidget):
     def _handle_drop(self, db_name: str):
         """Drop database with confirmation"""
         print(f"[DEBUG] Drop requested for database: {db_name}")
+
+        # Check permission
+        if self.permission_checker and not self.permission_checker.can_drop_database(db_name):
+            QMessageBox.warning(
+                self,
+                "🔒 Permission Denied",
+                f"You do not have permission to drop database '{db_name}'.\n\n"
+                f"Required permission: DELETE on '{db_name}'\n"
+                f"Please contact your administrator for access."
+            )
+            print(f"[PERMISSIONS] ✗ {self.user_data.get('username')} denied DROP DATABASE {db_name}")
+            return
+
         dialog = ConfirmationDialog(
             self,
             "⚠️ Confirm Database Drop",
             f"Are you sure you want to drop database '{db_name}'?",
             "This will permanently delete the database and all its data.\nThis action cannot be undone."
         )
-        
         reply = dialog.exec()
-        
         if reply == QMessageBox.Yes:
             try:
                 if not self.db_manager or not self.db_manager.connection.is_connected():
                     self.db_manager = DatabaseManager()
                     self.db_manager.connect()
-                
                 cursor = self.db_manager.connection.cursor()
                 cursor.execute(f"DROP DATABASE `{db_name}`")
                 cursor.close()
-                
                 self.drop_requested.emit(db_name)
-                
                 print(f"[SUCCESS] Database {db_name} dropped")
                 QMessageBox.information(
                     self,
                     "Database Dropped",
                     f"Database '{db_name}' has been successfully dropped."
                 )
-                
                 self.load_real_databases()
-                
             except Exception as e:
                 print(f"[ERROR] Failed to drop database: {e}")
                 traceback.print_exc()
@@ -1477,6 +1539,7 @@ class DatabasesPage(QWidget):
                     "Error Dropping Database",
                     f"Failed to drop database '{db_name}'.\n\nError: {str(e)}"
                 )
+
     
     def _handle_view_tables(self, db_name: str):
         """View and manage tables in database"""

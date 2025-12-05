@@ -202,7 +202,7 @@ class SettingsPage(QWidget):
         conn_layout.addLayout(form_layout)
         
         # Test connection button
-        btn_test_conn = QPushButton("⚡ Test Connection")
+        btn_test_conn = QPushButton(" Test Connection")
         btn_test_conn.setObjectName("secondaryButton")
         btn_test_conn.setMinimumHeight(44)
         btn_test_conn.setCursor(Qt.PointingHandCursor)
@@ -450,7 +450,7 @@ class SettingsPage(QWidget):
         else:
             QMessageBox.critical(
                 self,
-                "✗ Connection Failed",
+                " Connection Failed",
                 f"Failed to connect to MySQL server.\n\n{message}\n\nPlease check:\n"
                 "- MySQL is running in XAMPP\n"
                 "- Host and port are correct\n"
